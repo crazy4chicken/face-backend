@@ -14,7 +14,11 @@
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
-            "justMyCode": false
+            "justMyCode": false,
+            "env": {
+                "FACE_TEAMUSERS_URL": "http://127.0.0.1:18999",
+                "FACE_TEAMUSERS_SERVICE_TOKEN": "test-service-token"
+            }
         },
         {
             "name": "Python: 运行冒烟测试",

@@ -1,12 +1,12 @@
-"""人员库：PostgreSQL 存人员信息与 512 维人脸特征，余弦相似度检索。
+"""人员库：PostgreSQL 存 teamusers 用户 id 与 512 维人脸特征，余弦相似度检索。
 
 设计要点：
-- 特征向量 L2 归一化后以 BYTEA 存储，info 用 JSONB 存任意扩展字段；
+- 只存 teamusers 规范用户 id 与特征向量，不存姓名等任何其他内容；
+- 特征向量 L2 归一化后以 BYTEA 存储；
 - 检索走进程内缓存矩阵：增删后失效，下次检索时重建。
   所有向量已归一化，矩阵点积即余弦相似度，万级规模单次检索 <10ms；
 - 单连接 + 一把锁：所有读写互斥，避免跨线程使用同一连接的竞态。
 """
-import json
 import threading
 
 import numpy as np
@@ -14,10 +14,8 @@ import psycopg
 import psycopg.conninfo
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS persons (
-    id          SERIAL PRIMARY KEY,
-    name        TEXT        NOT NULL,
-    info        JSONB       NOT NULL DEFAULT '{}',
+CREATE TABLE IF NOT EXISTS faces (
+    user_id     TEXT        PRIMARY KEY,
     embedding   BYTEA       NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -41,71 +39,60 @@ def ensure_database(dsn: str) -> None:
             conn.execute(f'CREATE DATABASE "{dbname}"')
 
 
-class PersonStore:
+class FaceStore:
     def __init__(self, dsn: str) -> None:
         self._conn = psycopg.connect(dsn, autocommit=True)
         self._lock = threading.Lock()
         with self._lock:
             self._conn.execute(SCHEMA)
-        self._cache_rows: list[dict] = []
+        self._cache_ids: list[str] = []
         self._cache_matrix: np.ndarray | None = None
 
-    @staticmethod
-    def _row_to_dict(row) -> dict:
-        return {
-            "id": row[0],
-            "name": row[1],
-            "info": row[2] if isinstance(row[2], dict) else json.loads(row[2]),
-            "created_at": row[3].isoformat(),
-        }
-
     def _invalidate_cache(self) -> None:
-        self._cache_rows = []
+        self._cache_ids = []
         self._cache_matrix = None
 
-    def add(self, name: str, info: dict, embedding: np.ndarray) -> int:
+    def add(self, user_id: str, embedding: np.ndarray) -> None:
+        """登记人脸；同一 user_id 重复登记时覆盖旧特征。"""
         with self._lock:
-            row = self._conn.execute(
-                "INSERT INTO persons (name, info, embedding) VALUES (%s, %s, %s) RETURNING id",
-                (name, json.dumps(info, ensure_ascii=False), embedding.astype(np.float32).tobytes()),
-            ).fetchone()
+            self._conn.execute(
+                "INSERT INTO faces (user_id, embedding) VALUES (%s, %s) "
+                "ON CONFLICT (user_id) DO UPDATE SET embedding = EXCLUDED.embedding",
+                (user_id, embedding.astype(np.float32).tobytes()),
+            )
             self._invalidate_cache()
-            return row[0]
 
-    def get(self, person_id: int) -> dict | None:
+    def exists(self, user_id: str) -> bool:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT id, name, info, created_at FROM persons WHERE id = %s", (person_id,)
-            ).fetchone()
-        return self._row_to_dict(row) if row else None
+            row = self._conn.execute("SELECT 1 FROM faces WHERE user_id = %s", (user_id,)).fetchone()
+        return row is not None
 
-    def list(self) -> list[dict]:
+    def list(self) -> list[str]:
+        """返回所有已登记的 user_id。"""
         with self._lock:
-            rows = self._conn.execute("SELECT id, name, info, created_at FROM persons ORDER BY id").fetchall()
-        return [self._row_to_dict(r) for r in rows]
+            rows = self._conn.execute("SELECT user_id FROM faces ORDER BY user_id").fetchall()
+        return [r[0] for r in rows]
 
-    def delete(self, person_id: int) -> bool:
+    def delete(self, user_id: str) -> bool:
         with self._lock:
-            cur = self._conn.execute("DELETE FROM persons WHERE id = %s", (person_id,))
+            cur = self._conn.execute("DELETE FROM faces WHERE user_id = %s", (user_id,))
             self._invalidate_cache()
             return cur.rowcount > 0
 
-    def search(self, embedding: np.ndarray, threshold: float) -> tuple[dict | None, float | None]:
-        """返回 (最相似人员, 相似度)。
+    def search(self, embedding: np.ndarray, threshold: float) -> tuple[str | None, float | None]:
+        """返回 (最相似的 user_id, 相似度)。
 
-        相似度未达阈值时人员为 None，但仍返回最佳相似度便于排查；
-        人员库为空时返回 (None, None)。
+        相似度未达阈值时 user_id 为 None，但仍返回最佳相似度便于排查；
+        库为空时返回 (None, None)。
         """
         with self._lock:
             if self._cache_matrix is None:
-                rows = self._conn.execute(
-                    "SELECT id, name, info, created_at, embedding FROM persons"
-                ).fetchall()
-                self._cache_rows = rows
+                rows = self._conn.execute("SELECT user_id, embedding FROM faces").fetchall()
+                self._cache_ids = [r[0] for r in rows]
                 self._cache_matrix = (
-                    np.stack([np.frombuffer(r[4], dtype=np.float32) for r in rows]) if rows else None
+                    np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows]) if rows else None
                 )
-            rows, matrix = self._cache_rows, self._cache_matrix
+            ids, matrix = self._cache_ids, self._cache_matrix
 
             if matrix is None:
                 return None, None
@@ -116,7 +103,7 @@ class PersonStore:
 
         if best_sim < threshold:
             return None, best_sim
-        return self._row_to_dict(rows[best]), best_sim
+        return ids[best], best_sim
 
     def close(self) -> None:
         with self._lock:

@@ -27,17 +27,13 @@ MAX_PIXELS = int(os.getenv("FACE_MAX_PIXELS", str(40_000_000)))
 # 允许的跨域来源，逗号分隔；默认 "*" 方便联调，生产环境应收窄
 CORS_ORIGINS = [o.strip() for o in os.getenv("FACE_CORS_ORIGINS", "*").split(",") if o.strip()]
 
-# 姓名最大长度
-MAX_NAME_LEN = 128
+# user_id（teamusers id）最大长度
+MAX_USER_ID_LEN = 128
+# teamusers IAM
+TEAMUSERS_URL = os.getenv("FACE_TEAMUSERS_URL", "http://127.0.0.1:8080")
+TEAMUSERS_AUDIENCE = os.getenv("FACE_TEAMUSERS_AUDIENCE", "teamusers")
+TEAMUSERS_SERVICE_TOKEN = os.getenv("FACE_TEAMUSERS_SERVICE_TOKEN", "")
 
-# info JSON 最大长度
-MAX_INFO_LEN = 8192
-
-# JWT 鉴权
-JWT_SECRET = os.getenv("FACE_JWT_SECRET", "dev-secret-change-me-in-production")
-JWT_ALGORITHM = os.getenv("FACE_JWT_ALGORITHM", "HS256")
-JWT_EXPIRE_MINUTES = int(os.getenv("FACE_JWT_EXPIRE_MINUTES", "120"))
-
-# 登录账号（生产环境必须用环境变量覆盖）
-ADMIN_USERNAME = os.getenv("FACE_ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("FACE_ADMIN_PASSWORD", "admin123")
+# 权限点：识别/查询 与 注册/删除
+PERM_CHECK = "face:check:any"
+PERM_MODIFY = "face:modify:any"

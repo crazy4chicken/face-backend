@@ -1,50 +1,48 @@
-"""JWT 鉴权：HS256 对称签名。
+"""teamusers 鉴权：校验访问者的 EdDSA 访问令牌，并按权限点放行。
 
-- 签发：POST /auth/token 校验账号密码后签发；
-- 校验：除 /healthz 与文档页外，所有业务路由依赖 require_token。
-密钥、账号、有效期均走环境变量（见 config.py），生产环境必须改默认值。
+- 验签走 teamusers 的 JWKS（EdDSA），本服务不自己签发/校验令牌；
+- 权限判定：face:check:any 放行识别与查询，face:modify:any 放行注册与删除；
+- 未认证 → 401，已认证但无权限 → 403。
 """
-import hmac
-import time
-
-import jwt
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import HTTPException, Request
+from teamusers_sdk import (
+    Authenticate,
+    Client,
+    Claims,
+    PermissionsClient,
+    UnauthorizedError,
+    Verifier,
+)
 
 from . import config
 
-_bearer = HTTPBearer(auto_error=False, description="JWT Bearer Token")
+verifier = Verifier(config.TEAMUSERS_URL, audience=config.TEAMUSERS_AUDIENCE)
+permissions = PermissionsClient(config.TEAMUSERS_URL, service_token=config.TEAMUSERS_SERVICE_TOKEN)
+_client = Client(verifier=verifier, permissions=permissions)
 
 
-def create_token(subject: str) -> str:
-    now = int(time.time())
-    payload = {
-        "sub": subject,
-        "iat": now,
-        "exp": now + config.JWT_EXPIRE_MINUTES * 60,
-    }
-    return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
-
-
-def verify_credentials(username: str, password: str) -> bool:
-    """校验登录账号。hmac.compare_digest 防时序侧信道。"""
-    return hmac.compare_digest(username, config.ADMIN_USERNAME) and hmac.compare_digest(
-        password, config.ADMIN_PASSWORD
-    )
-
-
-def require_token(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
-    """FastAPI 依赖：校验 Bearer Token，合法返回 sub，否则 401。"""
-    if creds is None:
+def _authenticate(request: Request) -> Claims:
+    try:
+        return Authenticate({"headers": dict(request.headers)}, verifier)
+    except UnauthorizedError as e:
         raise HTTPException(
             status_code=401,
-            detail="缺少 Authorization Bearer Token",
+            detail=f"认证失败：{e}",
             headers={"WWW-Authenticate": "Bearer"},
-        )
-    try:
-        payload = jwt.decode(creds.credentials, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token 已过期", headers={"WWW-Authenticate": "Bearer"})
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Token 无效", headers={"WWW-Authenticate": "Bearer"})
-    return payload["sub"]
+        ) from e
+
+
+def _require(permission: str):
+    def dependency(request: Request) -> Claims:
+        claims = _authenticate(request)
+        allowed, reason = _client.allow(claims, permission, None)
+        if not allowed:
+            raise HTTPException(status_code=403, detail=f"无权限 {permission}：{reason}")
+        return claims
+
+    return dependency
+
+
+# FastAPI 依赖：检查权限 / 修改权限
+require_check = _require(config.PERM_CHECK)
+require_modify = _require(config.PERM_MODIFY)

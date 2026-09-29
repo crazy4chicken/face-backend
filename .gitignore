@@ -3,3 +3,9 @@ __pycache__/
 *.db
 .env
 *.log
+.venv/
+.ref/
+
+# 本地自用，不上交仓库
+smoke_test.py
+docs/小白入门指南.md

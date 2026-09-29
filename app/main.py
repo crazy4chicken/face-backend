@@ -1,28 +1,31 @@
 """人脸识别后端 API。
 
 约定：注册照片必须为单人照；识别照片可含多张人脸（通常不多）。
+人员以 teamusers 用户 id 标识，本服务不存姓名等任何其他信息。
 
-路由（除 /healthz 与 /auth/token 外均需 JWT Bearer Token）：
-    POST   /auth/token       登录签发 JWT（账号密码由环境变量配置）
-    POST   /persons          注册人员（姓名 + 单人照片；照片含多张人脸时拒绝）
-    GET    /persons          列出所有已注册人员
-    GET    /persons/{id}     查询单个人员
-    DELETE /persons/{id}     删除人员
-    POST   /recognize        识别照片中的所有人脸，逐脸返回匹配的人员信息
-    GET    /healthz          健康检查（无需鉴权，供探活）
+鉴权：所有业务接口要求 teamusers 访问令牌；
+识别/查询需要 face:check:any，注册/删除需要 face:modify:any。
 
-启动：uvicorn app.main:app --host 0.0.0.0 --port 18000
+路由：
+    POST   /faces/{user_id}   登记人脸（单人照片；多张人脸时拒绝）
+    GET    /faces             列出所有已登记的 user_id
+    GET    /faces/{user_id}   查询某人是否已登记
+    DELETE /faces/{user_id}   删除登记
+    POST   /recognize         识别照片中的所有人脸，逐脸返回匹配的 user_id
+    GET    /healthz           健康检查（无需鉴权，供探活）
+
+启动：uv run uvicorn app.main:app --host 0.0.0.0 --port 18000
 文档：http://127.0.0.1:18000/docs
 """
-import json
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
-from .auth import create_token, require_token, verify_credentials
-from .db import PersonStore, ensure_database
+from .auth import require_check, require_modify
+from .db import FaceStore, ensure_database
 from .engine import get_engine
 
 
@@ -30,33 +33,19 @@ from .engine import get_engine
 async def lifespan(app: FastAPI):
     # 启动时初始化数据库并预热模型：避免首个请求承担 ~10s 的模型加载
     ensure_database(config.DATABASE_URL)
-    app.state.store = PersonStore(config.DATABASE_URL)
+    app.state.store = FaceStore(config.DATABASE_URL)
     app.state.engine = get_engine()
     yield
     app.state.store.close()
 
 
-app = FastAPI(title="Face Recognition Backend", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Face Recognition Backend", version="3.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.post("/auth/token")
-def login(
-    username: str = Form(...),
-    password: str = Form(...),
-):
-    """账号密码登录，签发 JWT。账号密码由环境变量 FACE_ADMIN_USERNAME/PASSWORD 配置。"""
-    if not verify_credentials(username, password):
-        raise HTTPException(status_code=401, detail="账号或密码错误")
-    return {
-        "access_token": create_token(username),
-        "token_type": "bearer",
-        "expires_in": config.JWT_EXPIRE_MINUTES * 60,
-    }
 
 
 def _read_image(file: UploadFile) -> bytes:
@@ -82,78 +71,66 @@ def _analyze(image: UploadFile):
 
 
 def _analyze_single(image: UploadFile):
-    """注册专用：强制恰好一张人脸，防止合影注册时取错人。"""
+    """登记专用：强制恰好一张人脸，防止合影登记时取错人。"""
     faces = _analyze(image)
     if not faces:
         raise HTTPException(status_code=422, detail="未在照片中检测到人脸")
     if len(faces) > 1:
-        raise HTTPException(status_code=422, detail=f"注册照片检测到 {len(faces)} 张人脸，无法确定注册对象，请上传单人照片")
+        raise HTTPException(status_code=422, detail=f"登记照片检测到 {len(faces)} 张人脸，无法确定登记对象，请上传单人照片")
     return faces[0]
 
 
-@app.post("/persons", status_code=201, dependencies=[Depends(require_token)])
-def register_person(
-    name: str = Form(..., description="姓名"),
-    info: str = Form("{}", description='附加信息 JSON 对象，如 {"student_id": "001"}'),
-    image: UploadFile = File(..., description="此人单人正脸照片"),
-):
-    """注册人员。照片必须恰好包含一张人脸，否则返回 422。"""
-    name = name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="姓名不能为空")
-    if len(name) > config.MAX_NAME_LEN:
-        raise HTTPException(status_code=400, detail=f"姓名超过长度上限 {config.MAX_NAME_LEN}")
-    if len(info) > config.MAX_INFO_LEN:
-        raise HTTPException(status_code=400, detail=f"info 超过长度上限 {config.MAX_INFO_LEN}")
-    try:
-        extra = json.loads(info)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="info 不是合法的 JSON")
-    if not isinstance(extra, dict):
-        raise HTTPException(status_code=400, detail="info 必须是 JSON 对象")
+@app.post("/faces/{user_id}", status_code=201, dependencies=[Depends(require_modify)])
+def register_face(user_id: str, image: UploadFile = File(..., description="此人单人正脸照片")):
+    """为指定 teamusers 用户登记人脸。重复登记会覆盖旧特征。"""
+    user_id = user_id.strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id 不能为空")
+    if len(user_id) > config.MAX_USER_ID_LEN:
+        raise HTTPException(status_code=400, detail=f"user_id 超过长度上限 {config.MAX_USER_ID_LEN}")
 
     face = _analyze_single(image)
-    person_id = app.state.store.add(name=name, info=extra, embedding=face.embedding)
-    return {"id": person_id, "name": name, "info": extra, "message": "注册成功"}
+    existed = app.state.store.exists(user_id)
+    app.state.store.add(user_id=user_id, embedding=face.embedding)
+    return {"user_id": user_id, "overwritten": existed}
 
 
-@app.get("/persons", dependencies=[Depends(require_token)])
-def list_persons():
-    persons = app.state.store.list()
-    return {"count": len(persons), "persons": persons}
+@app.get("/faces", dependencies=[Depends(require_check)])
+def list_faces():
+    ids = app.state.store.list()
+    return {"count": len(ids), "user_ids": ids}
 
 
-@app.get("/persons/{person_id}", dependencies=[Depends(require_token)])
-def get_person(person_id: int):
-    person = app.state.store.get(person_id)
-    if person is None:
-        raise HTTPException(status_code=404, detail="人员不存在")
-    return person
+@app.get("/faces/{user_id}", dependencies=[Depends(require_check)])
+def get_face(user_id: str):
+    if not app.state.store.exists(user_id):
+        raise HTTPException(status_code=404, detail="该用户未登记人脸")
+    return {"user_id": user_id, "registered": True}
 
 
-@app.delete("/persons/{person_id}", dependencies=[Depends(require_token)])
-def delete_person(person_id: int):
-    if not app.state.store.delete(person_id):
-        raise HTTPException(status_code=404, detail="人员不存在")
-    return {"deleted": person_id}
+@app.delete("/faces/{user_id}", dependencies=[Depends(require_modify)])
+def delete_face(user_id: str):
+    if not app.state.store.delete(user_id):
+        raise HTTPException(status_code=404, detail="该用户未登记人脸")
+    return {"deleted": user_id}
 
 
-@app.post("/recognize", dependencies=[Depends(require_token)])
+@app.post("/recognize", dependencies=[Depends(require_check)])
 def recognize(image: UploadFile = File(..., description="待识别照片，可含多张人脸")):
-    """识别照片：返回每张人脸的位置及匹配结果；未匹配时 person 为 null。
+    """识别照片：逐脸返回位置及匹配的 user_id；未匹配时 user_id 为 null。
 
     图中没有人脸时返回 faces_found=0 与空列表（200，属正常业务结果而非错误）。
     """
     faces = _analyze(image)
     results = []
     for face in faces:
-        person, similarity = app.state.store.search(face.embedding, config.MATCH_THRESHOLD)
+        user_id, similarity = app.state.store.search(face.embedding, config.MATCH_THRESHOLD)
         results.append({
             "bbox": face.bbox,
             "det_score": face.det_score,
-            "matched": person is not None,
+            "matched": user_id is not None,
             "similarity": similarity,
-            "person": person,
+            "user_id": user_id,
         })
     return {"faces_found": len(results), "faces": results}
 

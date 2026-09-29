@@ -4,22 +4,28 @@
         {
             "label": "启动后端 (后台)",
             "type": "shell",
-            "command": "python -m uvicorn app.main:app --host 127.0.0.1 --port 18000",
-            "options": { "cwd": "${workspaceFolder}" },
+            "command": "uv run uvicorn app.main:app --host 127.0.0.1 --port 18000",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "FACE_TEAMUSERS_URL": "http://127.0.0.1:18999",
+                    "FACE_TEAMUSERS_SERVICE_TOKEN": "test-service-token"
+                }
+            },
             "isBackground": true,
             "problemMatcher": []
         },
         {
             "label": "运行冒烟测试",
             "type": "shell",
-            "command": "python smoke_test.py",
+            "command": "uv run python smoke_test.py",
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         },
         {
             "label": "安装依赖",
             "type": "shell",
-            "command": "pip install -r requirements.txt",
+            "command": "uv sync",
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         }
