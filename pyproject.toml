@@ -12,7 +12,7 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "numpy>=1.26",
     "psycopg[binary]>=3.2",
-    "teamusers-sdk>=0.1.0",
+    "teamusers-sdk>=0.2.0",
 ]
 
 [dependency-groups]

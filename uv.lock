@@ -361,7 +361,7 @@ requires-dist = [
     { name = "opencv-python-headless", specifier = ">=4.9" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "teamusers-sdk", specifier = ">=0.1.0" },
+    { name = "teamusers-sdk", specifier = ">=0.2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
 
@@ -1209,14 +1209,14 @@ wheels = [
 
 [[package]]
 name = "teamusers-sdk"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
 ]
-sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/95/e7/f4198bbcc5914de944361115f9b1df9d25f6d6b8f33ca14cc2b74c1c2401/teamusers_sdk-0.1.0.tar.gz", hash = "sha256:97443a42ddf6b311a202d1a1d6eec41f6dda0efb8298a4d58d5edd6ec2dc91f0", size = 26709, upload-time = "2026-09-26T16:50:44.611Z" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/66/37/9b3a4ebbe546b697fd3b7e23dc2f740d172730575afc25c31c0c23659ae2/teamusers_sdk-0.2.0.tar.gz", hash = "sha256:28d8fe9e485d513caf3fb58bde5fa62ec99cf6a83cb79a5ad991eaca70b5e72c", size = 30524, upload-time = "2026-10-02T04:31:05.855Z" }
 wheels = [
-    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/7e/d9/e90ad04fb2e8c9403edb276ac4cbbb32ead661d768675e6851629fb68993/teamusers_sdk-0.1.0-py3-none-any.whl", hash = "sha256:7bb3ad2666faa20190b88f97332eb82ed397399cecc0d55fa7d10ffb37dbd7df", size = 24895, upload-time = "2026-09-26T16:50:43.267Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/88/7e/c618b2f251244258df99636f55765713b1d18a7d3b9dc42fc2f8f23f2819/teamusers_sdk-0.2.0-py3-none-any.whl", hash = "sha256:c49aaca8fc3aa7c28a44ff1fd0ad6a2a265289bfc7dcf393dcb58d5759c233f9", size = 27535, upload-time = "2026-10-02T04:31:04.657Z" },
 ]
 
 [[package]]
